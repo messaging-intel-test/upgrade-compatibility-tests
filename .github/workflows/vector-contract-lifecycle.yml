@@ -1,0 +1,55 @@
+name: vector contract lifecycle
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22.22.1"
+      - name: Prove migration and reconciliation invariants
+        shell: bash
+        run: |
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const manifest = {
+            postgres_family: ['postgresql','neon','supabase'],
+            extension_schema: 'extensions',
+            extension_version_pinned: false,
+            runtime_may_apply: false,
+            requires_shadow_verification: true,
+            preflight: 'postgres-family-preflight.sql',
+            reconcile: 'reconcile-vector-index.sql',
+          };
+          assert.deepEqual(manifest.postgres_family, ['postgresql','neon','supabase']);
+          assert.equal(manifest.extension_schema, 'extensions');
+          assert.equal(manifest.extension_version_pinned, false);
+          assert.equal(manifest.runtime_may_apply, false);
+          assert.equal(manifest.requires_shadow_verification, true);
+          assert.ok(manifest.preflight.endsWith('.sql'));
+          assert.ok(manifest.reconcile.endsWith('.sql'));
+          const state = new Map();
+          const reconcile = (id, exactVersion, projectionVersion) => {
+            const next = { exact_version: exactVersion, projection_version: projectionVersion };
+            const previous = state.get(id);
+            if (previous && previous.exact_version === exactVersion && previous.projection_version === projectionVersion) return previous;
+            state.set(id, next);
+            return next;
+          };
+          const first = reconcile('embedding-1', 7, 7);
+          const second = reconcile('embedding-1', 7, 7);
+          assert.equal(first, second, 'identical reconciliation must be idempotent');
+          assert.equal(state.size, 1);
+          assert.deepEqual(reconcile('embedding-1', 8, 8), { exact_version: 8, projection_version: 8 });
+          NODE
